@@ -1,0 +1,242 @@
+/* global BigInt */
+import {
+  Keypair,
+  SystemProgram,
+  Transaction,
+  PublicKey,
+  TransactionInstruction
+} from '@solana/web3.js';
+import {
+  createCreateMetadataAccountV3Instruction,
+  getMetadataPDA
+} from './metaplex';
+
+const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+
+const MINT_SIZE = 82;
+
+// ==================== BINARY HELPERS ====================
+
+function writeUint32LE(value, buffer, offset) {
+  buffer[offset] = value & 0xff;
+  buffer[offset + 1] = (value >> 8) & 0xff;
+  buffer[offset + 2] = (value >> 16) & 0xff;
+  buffer[offset + 3] = (value >> 24) & 0xff;
+}
+
+function writeBigUint64LE(value, buffer, offset) {
+  const bigValue = BigInt.asUintN(64, BigInt(value));
+  const low = Number(bigValue & BigInt(0xffffffff));
+  const high = Number(bigValue >> BigInt(32));
+  writeUint32LE(low, buffer, offset);
+  writeUint32LE(high, buffer, offset + 4);
+}
+
+// ==================== INSTRUCTION BUILDERS ====================
+
+function createInitializeMintInstruction(mint, decimals, mintAuthority, freezeAuthority) {
+  const keys = [
+    { pubkey: mint, isSigner: false, isWritable: true },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }
+  ];
+
+  const data = new Uint8Array(67);
+  let offset = 0;
+
+  data[offset++] = 0; // InitializeMint instruction
+  data[offset++] = decimals;
+
+  data.set(mintAuthority.toBytes(), offset);
+  offset += 32;
+
+  data[offset++] = freezeAuthority ? 1 : 0;
+  if (freezeAuthority) {
+    data.set(freezeAuthority.toBytes(), offset);
+    offset += 32;
+  }
+
+  return {
+    keys,
+    programId: TOKEN_PROGRAM_ID,
+    data: data.slice(0, offset)
+  };
+}
+
+function createAssociatedTokenAccountInstruction(payer, associatedToken, owner, mint) {
+  const keys = [
+    { pubkey: payer, isSigner: true, isWritable: true },
+    { pubkey: associatedToken, isSigner: false, isWritable: true },
+    { pubkey: owner, isSigner: false, isWritable: false },
+    { pubkey: mint, isSigner: false, isWritable: false },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    { pubkey: PublicKey.default, isSigner: false, isWritable: false }
+  ];
+
+  return {
+    keys,
+    programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+    data: new Uint8Array(0)
+  };
+}
+
+function createMintToInstruction(mint, destination, authority, amount) {
+  const keys = [
+    { pubkey: mint, isSigner: false, isWritable: true },
+    { pubkey: destination, isSigner: false, isWritable: true },
+    { pubkey: authority, isSigner: true, isWritable: false }
+  ];
+
+  const data = new Uint8Array(9);
+  data[0] = 7; // MintTo instruction
+  writeBigUint64LE(amount, data, 1);
+
+  return {
+    keys,
+    programId: TOKEN_PROGRAM_ID,
+    data
+  };
+}
+
+// ==================== GET ASSOCIATED TOKEN ADDRESS ====================
+
+async function getAssociatedTokenAddress(mint, owner) {
+  const [address] = await PublicKey.findProgramAddress(
+    [owner.toBytes(), TOKEN_PROGRAM_ID.toBytes(), mint.toBytes()],
+    ASSOCIATED_TOKEN_PROGRAM_ID
+  );
+  return address;
+}
+
+// ==================== MAIN DEPLOY FUNCTION ====================
+
+export async function deployToken({
+  name,
+  symbol,
+  supply,
+  decimals,
+  description,
+  imageUrl,
+  wallet,
+  connection,
+  network,
+  onLog
+}) {
+  onLog(`Starting deployment: ${name} (${symbol})`);
+
+  // Check balance
+  const balanceResult = await connection.getBalance(wallet.keypair.publicKey);
+  const balance = balanceResult && typeof balanceResult === 'object' ? balanceResult.value : balanceResult;
+  if (balance < 0.01 * 1e9) {
+    throw new Error('Insufficient SOL. Need at least 0.01 SOL.');
+  }
+
+  // Generate mint keypair
+  const mintKeypair = Keypair.generate();
+  onLog(`Generated mint: ${mintKeypair.publicKey.toString().slice(0, 20)}...`);
+
+  // Get rent exemption
+  const lamports = await connection.getMinimumBalanceForRentExemption(MINT_SIZE);
+  onLog(`Rent exemption: ${lamports} lamports`);
+
+  // Get metadata PDA from metaplex.js
+  const metadataPDA = getMetadataPDA(mintKeypair.publicKey);
+
+  // Get associated token address
+  const ata = await getAssociatedTokenAddress(
+    mintKeypair.publicKey,
+    wallet.keypair.publicKey
+  );
+
+  // Fix: use BigInt for supply calculation to avoid precision loss
+  const mintAmount = BigInt(supply) * BigInt(10 ** parseInt(decimals));
+
+  // Build transaction
+  const transaction = new Transaction();
+
+  // 1. Create mint account
+  transaction.add(
+    SystemProgram.createAccount({
+      fromPubkey: wallet.keypair.publicKey,
+      newAccountPubkey: mintKeypair.publicKey,
+      space: MINT_SIZE,
+      lamports,
+      programId: TOKEN_PROGRAM_ID
+    })
+  );
+
+  // 2. Initialize mint
+  transaction.add(
+    new TransactionInstruction(
+      createInitializeMintInstruction(
+        mintKeypair.publicKey,
+        parseInt(decimals),
+        wallet.keypair.publicKey,
+        wallet.keypair.publicKey
+      )
+    )
+  );
+
+  // 3. Create metadata — imported from metaplex.js, no duplication
+  transaction.add(
+    createCreateMetadataAccountV3Instruction(
+      mintKeypair.publicKey,
+      metadataPDA,
+      wallet.keypair.publicKey,
+      wallet.keypair.publicKey,
+      wallet.keypair.publicKey,
+      {
+        name,
+        symbol,
+        uri: imageUrl || '',
+        sellerFeeBasisPoints: 0,
+        isMutable: true
+      }
+    )
+  );
+
+  // 4. Create associated token account
+  transaction.add(
+    new TransactionInstruction(
+      createAssociatedTokenAccountInstruction(
+        wallet.keypair.publicKey,
+        ata,
+        wallet.keypair.publicKey,
+        mintKeypair.publicKey
+      )
+    )
+  );
+
+  // 5. Mint tokens to ATA
+  transaction.add(
+  transaction.sign(wallet.keypair, mintKeypair);
+        mintKeypair.publicKey,
+        ata,
+        wallet.keypair.publicKey,
+        mintAmount
+      )
+    )
+  );
+
+  // Send transaction
+  transaction.feePayer = wallet.keypair.publicKey;
+  const { blockhash } = await connection.getLatestBlockhash();
+  transaction.recentBlockhash = blockhash;
+
+  transaction.partialSign(mintKeypair);
+  transaction.sign(wallet.keypair);
+
+  onLog('Sending transaction...');
+  const signature = await connection.sendRawTransaction(transaction.serialize());
+  await connection.confirmTransaction(signature, 'confirmed');
+
+  onLog('✓ Token deployed!', 'success');
+
+  return {
+    mint: mintKeypair.publicKey.toString(),
+    signature,
+    ata: ata.toString()
+  };
+}
+
