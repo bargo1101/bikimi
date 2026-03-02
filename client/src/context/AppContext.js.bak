@@ -39,17 +39,9 @@ export function AppProvider({ children }) {
     walletsRef.current = wallets;
   }, [wallets]);
 
-// Use backend proxy (fixes Helius localhost/domain restriction + keeps key server-side)
-  const rpcUrl = network === 'mainnet-beta'
-    ? 'http://localhost:3001/rpc/mainnet-beta'
-    : 'http://localhost:3001/rpc/devnet';
-
-  // Fix: connection memoized + mainnet-friendly options
+  // Fix: connection memoized so it doesnt recreate every render
   const connection = useMemo(
-    () => new Connection(rpcUrl, {
-      commitment: 'confirmed',
-      confirmTransactionInitialTimeout: 90000, // 90s for mainnet stability
-    }),
+    () => new Connection(network === 'mainnet-beta' ? 'https://api.mainnet-beta.solana.com' : 'https://api.devnet.solana.com', 'confirmed'),
     [network]
   );
 
@@ -82,7 +74,7 @@ export function AppProvider({ children }) {
   const refreshWalletBalances = refreshBalances;
 
   // ==================== LOAD DATA ====================
-	  useEffect(() => {
+  useEffect(() => {
     const loadData = async () => {
       try {
         const savedWallets = await localforage.getItem('wallets');

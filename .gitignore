@@ -1,6 +1,38 @@
+# Node / packages
 node_modules/
-client/node_modules/
-server/node_modules/
-client/build/
+npm-debug.log
+yarn-error.log
+package-lock.json
+yarn.lock
+
+# Builds & dist
+dist/
+build/
+android/app/build/
+android/.gradle/
+android/local.properties
+
+# Environment / secrets (NEVER commit these!)
 .env
-.env.*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs & temp files
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Cache & IDE
+.cache/
+.idea/
+.vscode/
+
+# Coverage
+coverage/
+
+# Misc
+*.swp
+*.swo

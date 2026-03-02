@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { createMint, getOrCreateAssociatedTokenAccount, mintTo } from '@solana/spl-token';
+import { deployToken } from '../utils/solana';
 
 export default function DeployPage() {
   const { connection, wallets, addLog, setDeployedToken, addDebug, addTokenToHistory, network } = useApp();
@@ -69,7 +69,7 @@ export default function DeployPage() {
     return result.url;
   };
 
-  const deployToken = async () => {
+  const handleDeploy = async () => {
     addDebug("DEPLOY clicked on " + network);
 
     if (!connection || wallets.length === 0) {
@@ -86,6 +86,7 @@ export default function DeployPage() {
       let imageUrl = null;
       let metadataUri = null;
 
+      // Upload image and metadata first (before any blockchain txs)
       if (tokenImage) {
         addDebug('Uploading image to IPFS...');
         setIsUploading(true);
@@ -98,56 +99,42 @@ export default function DeployPage() {
         setIsUploading(false);
       }
 
-      addDebug('Step 1: Create mint...');
-      const mint = await createMint(
-        connection,
-        wallet.keypair,
-        wallet.keypair.publicKey,
-        wallet.keypair.publicKey,
-        decimals
-      );
-      addDebug('Mint OK: ' + mint.toString().slice(0,8));
-
-      addDebug('Step 2: Create account...');
-      const tokenAccount = await getOrCreateAssociatedTokenAccount(
-        connection,
-        wallet.keypair,
-        mint,
-        wallet.keypair.publicKey
-      );
-      addDebug('Account OK');
-
-      if (!tokenAccount || !tokenAccount.address) throw new Error('Token account has no address');
-
-      const amount = supply * Math.pow(10, decimals);
-      addDebug('Step 3: Mint ' + supply + ' tokens...');
-
-      await mintTo(
-        connection,
-        wallet.keypair,
-        mint,
-        tokenAccount.address,
-        wallet.keypair,
-        amount
-      );
-      addDebug('Mint SUCCESS!');
+      // Use the atomic deployment from solana.js
+      addDebug('Starting atomic deployment...');
+      const result = await deployToken({
+        name: tokenName || 'My Token',
+        symbol: tokenSymbol || 'MTK',
+        supply: supply,
+        decimals: decimals,
+        description: 'Token created with Nexus Launchpad',
+        imageUrl: metadataUri, // Use metadata URI as the imageUrl param
+        wallet: wallet,
+        connection: connection,
+        network: network,
+        onLog: (msg, type) => {
+          addDebug(msg);
+          if (type === 'success') addLog(msg, 'success');
+        }
+      });
 
       const tokenInfo = {
-        mint: mint.toString(),
+        mint: result.mint,
         name: tokenName || 'My Token',
         symbol: tokenSymbol || 'MTK',
         decimals,
         supply,
         owner: wallet.publicKey,
-        tokenAccount: tokenAccount.address.toString(),
+        tokenAccount: result.ata,
         image: imageUrl,
-        metadataUri
+        metadataUri,
+        signature: result.signature
       };
 
       addTokenToHistory(tokenInfo);
       setDeployedToken(tokenInfo);
-      addDebug('SUCCESS! Token deployed.');
-      addLog('Token deployed with IPFS image!', 'success');
+      addDebug('SUCCESS! Token deployed: ' + result.mint.slice(0,8));
+      addLog('Token deployed successfully!', 'success');
+
     } catch (err) {
       addDebug('ERROR: ' + err.message);
       console.error(err);
@@ -161,45 +148,97 @@ export default function DeployPage() {
   return (
     <div style={{ padding: '10px' }}>
       <div style={{ background: 'rgba(0,0,0,0.3)', padding: '15px', borderRadius: '8px' }}>
-        <div style={{ color: '#00f3ff', marginBottom: '15px' }}>{/* DEPLOY TOKEN */} </div>
+        <div style={{ color: '#00f3ff', marginBottom: '15px' }}>DEPLOY TOKEN</div>
 
         {wallets.length === 0 ? (
           <p style={{ color: '#ff4444' }}>Create a wallet first!</p>
         ) : (
           <>
-            <select value={selectedWallet} onChange={e => setSelectedWallet(Number(e.target.value))} style={{ width: '100%', marginBottom: '10px' }}>
+            <select 
+              value={selectedWallet} 
+              onChange={e => setSelectedWallet(Number(e.target.value))} 
+              style={{ width: '100%', marginBottom: '10px', padding: '8px' }}
+            >
               {wallets.map((w, i) => (
-                <option key={w.publicKey} value={i}>{w.name} ({w.publicKey.slice(0,8)}...)</option>
+                <option key={w.publicKey} value={i}>
+                  {w.name} ({w.publicKey.slice(0,8)}...)
+                </option>
               ))}
             </select>
 
-            <input value={tokenName} onChange={e => setTokenName(e.target.value)} placeholder="Token Name" style={{ width: '100%', marginBottom: '10px' }} />
-            <input value={tokenSymbol} onChange={e => setTokenSymbol(e.target.value)} placeholder="Symbol (e.g. MTK)" style={{ width: '100%', marginBottom: '10px' }} />
-            <input type="number" value={decimals} onChange={e => setDecimals(Number(e.target.value))} placeholder="Decimals" style={{ width: '100%', marginBottom: '10px' }} />
-            <input type="number" value={supply} onChange={e => setSupply(Number(e.target.value))} placeholder="Supply" style={{ width: '100%', marginBottom: '10px' }} />
+            <input 
+              value={tokenName} 
+              onChange={e => setTokenName(e.target.value)} 
+              placeholder="Token Name" 
+              style={{ width: '100%', marginBottom: '10px', padding: '8px' }} 
+            />
+            
+            <input 
+              value={tokenSymbol} 
+              onChange={e => setTokenSymbol(e.target.value)} 
+              placeholder="Symbol (e.g. MTK)" 
+              style={{ width: '100%', marginBottom: '10px', padding: '8px' }} 
+            />
+            
+            <input 
+              type="number" 
+              value={decimals} 
+              onChange={e => setDecimals(Number(e.target.value))} 
+              placeholder="Decimals" 
+              style={{ width: '100%', marginBottom: '10px', padding: '8px' }} 
+            />
+            
+            <input 
+              type="number" 
+              value={supply} 
+              onChange={e => setSupply(Number(e.target.value))} 
+              placeholder="Supply" 
+              style={{ width: '100%', marginBottom: '10px', padding: '8px' }} 
+            />
 
             <div style={{ marginBottom: '10px' }}>
-              <label style={{ color: '#00f3ff', fontSize: '12px', display: 'block', marginBottom: '5px' }}>Token Image (IPFS):</label>
-              <input type="file" accept="image/*" onChange={handleImageSelect} style={{ width: '100%', color: '#fff' }} />
+              <label style={{ color: '#00f3ff', fontSize: '12px', display: 'block', marginBottom: '5px' }}>
+                Token Image (IPFS):
+              </label>
+              <input 
+                type="file" 
+                accept="image/*" 
+                onChange={handleImageSelect} 
+                style={{ width: '100%', color: '#fff' }} 
+              />
               {imagePreview && (
                 <div style={{ marginTop: '10px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <img src={imagePreview} alt="Preview" style={{ width: '64px', height: '64px', borderRadius: '50%', objectFit: 'cover' }} />
+                  <img 
+                    src={imagePreview} 
+                    alt="Preview" 
+                    style={{ width: '64px', height: '64px', borderRadius: '50%', objectFit: 'cover' }} 
+                  />
                   <span style={{ color: '#0f0', fontSize: '12px' }}>✓ Ready for IPFS</span>
-                 </div>
+                </div>
               )}
-             </div>
+            </div>
 
             <button
-              onClick={deployToken}
+              onClick={handleDeploy}
               disabled={isDeploying || isUploading}
-              style={{ width: '100%', padding: '10px', background: (isDeploying || isUploading) ? '#333' : '#00f3ff', marginTop: '10px' }}
+              style={{ 
+                width: '100%', 
+                padding: '10px', 
+                background: (isDeploying || isUploading) ? '#333' : '#00f3ff', 
+                color: (isDeploying || isUploading) ? '#888' : '#000',
+                marginTop: '10px',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: (isDeploying || isUploading) ? 'not-allowed' : 'pointer',
+                fontWeight: 'bold'
+              }}
             >
               {isUploading ? 'Uploading to IPFS...' : isDeploying ? 'Deploying...' : 'Deploy Token'}
             </button>
           </>
         )}
-       </div>
-     </div>
+      </div>
+    </div>
   );
 }
 

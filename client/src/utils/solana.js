@@ -4,110 +4,23 @@ import {
   SystemProgram,
   Transaction,
   PublicKey,
-  TransactionInstruction
+  SYSVAR_RENT_PUBKEY,
+  ComputeBudgetProgram
 } from '@solana/web3.js';
+import {
+  createInitializeMintInstruction,
+  createAssociatedTokenAccountInstruction,
+  createMintToInstruction,
+  getAssociatedTokenAddress,
+  TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID
+} from '@solana/spl-token';  // USE OFFICIAL LIBRARY!
 import {
   createCreateMetadataAccountV3Instruction,
   getMetadataPDA
-} from './metaplex';
-
-const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
-const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+} from './metaplex.js';
 
 const MINT_SIZE = 82;
-
-// ==================== BINARY HELPERS ====================
-
-function writeUint32LE(value, buffer, offset) {
-  buffer[offset] = value & 0xff;
-  buffer[offset + 1] = (value >> 8) & 0xff;
-  buffer[offset + 2] = (value >> 16) & 0xff;
-  buffer[offset + 3] = (value >> 24) & 0xff;
-}
-
-function writeBigUint64LE(value, buffer, offset) {
-  const bigValue = BigInt.asUintN(64, BigInt(value));
-  const low = Number(bigValue & BigInt(0xffffffff));
-  const high = Number(bigValue >> BigInt(32));
-  writeUint32LE(low, buffer, offset);
-  writeUint32LE(high, buffer, offset + 4);
-}
-
-// ==================== INSTRUCTION BUILDERS ====================
-
-function createInitializeMintInstruction(mint, decimals, mintAuthority, freezeAuthority) {
-  const keys = [
-    { pubkey: mint, isSigner: false, isWritable: true },
-    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }
-  ];
-
-  const data = new Uint8Array(67);
-  let offset = 0;
-
-  data[offset++] = 0; // InitializeMint instruction
-  data[offset++] = decimals;
-
-  data.set(mintAuthority.toBytes(), offset);
-  offset += 32;
-
-  data[offset++] = freezeAuthority ? 1 : 0;
-  if (freezeAuthority) {
-    data.set(freezeAuthority.toBytes(), offset);
-    offset += 32;
-  }
-
-  return {
-    keys,
-    programId: TOKEN_PROGRAM_ID,
-    data: data.slice(0, offset)
-  };
-}
-
-function createAssociatedTokenAccountInstruction(payer, associatedToken, owner, mint) {
-  const keys = [
-    { pubkey: payer, isSigner: true, isWritable: true },
-    { pubkey: associatedToken, isSigner: false, isWritable: true },
-    { pubkey: owner, isSigner: false, isWritable: false },
-    { pubkey: mint, isSigner: false, isWritable: false },
-    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-    { pubkey: PublicKey.default, isSigner: false, isWritable: false }
-  ];
-
-  return {
-    keys,
-    programId: ASSOCIATED_TOKEN_PROGRAM_ID,
-    data: new Uint8Array(0)
-  };
-}
-
-function createMintToInstruction(mint, destination, authority, amount) {
-  const keys = [
-    { pubkey: mint, isSigner: false, isWritable: true },
-    { pubkey: destination, isSigner: false, isWritable: true },
-    { pubkey: authority, isSigner: true, isWritable: false }
-  ];
-
-  const data = new Uint8Array(9);
-  data[0] = 7; // MintTo instruction
-  writeBigUint64LE(amount, data, 1);
-
-  return {
-    keys,
-    programId: TOKEN_PROGRAM_ID,
-    data
-  };
-}
-
-// ==================== GET ASSOCIATED TOKEN ADDRESS ====================
-
-async function getAssociatedTokenAddress(mint, owner) {
-  const [address] = await PublicKey.findProgramAddress(
-    [owner.toBytes(), TOKEN_PROGRAM_ID.toBytes(), mint.toBytes()],
-    ASSOCIATED_TOKEN_PROGRAM_ID
-  );
-  return address;
-}
 
 // ==================== MAIN DEPLOY FUNCTION ====================
 
@@ -121,39 +34,46 @@ export async function deployToken({
   wallet,
   connection,
   network,
-  onLog
+  onLog,
+  priorityFeeLamports = 10000
 }) {
   onLog(`Starting deployment: ${name} (${symbol})`);
 
-  // Check balance
+  if (!wallet?.keypair) throw new Error('Wallet not provided');
+  if (!connection) throw new Error('Connection not provided');
+
   const balanceResult = await connection.getBalance(wallet.keypair.publicKey);
-  const balance = balanceResult && typeof balanceResult === 'object' ? balanceResult.value : balanceResult;
+  const balance = typeof balanceResult === 'object' ? balanceResult.value : balanceResult;
+  
   if (balance < 0.01 * 1e9) {
     throw new Error('Insufficient SOL. Need at least 0.01 SOL.');
   }
 
-  // Generate mint keypair
   const mintKeypair = Keypair.generate();
   onLog(`Generated mint: ${mintKeypair.publicKey.toString().slice(0, 20)}...`);
 
-  // Get rent exemption
   const lamports = await connection.getMinimumBalanceForRentExemption(MINT_SIZE);
   onLog(`Rent exemption: ${lamports} lamports`);
 
-  // Get metadata PDA from metaplex.js
   const metadataPDA = getMetadataPDA(mintKeypair.publicKey);
-
-  // Get associated token address
   const ata = await getAssociatedTokenAddress(
     mintKeypair.publicKey,
     wallet.keypair.publicKey
   );
-
-  // Fix: use BigInt for supply calculation to avoid precision loss
   const mintAmount = BigInt(supply) * BigInt(10 ** parseInt(decimals));
 
-  // Build transaction
   const transaction = new Transaction();
+
+  // Priority fees
+  transaction.add(
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 80000 })
+  );
+  transaction.add(
+    ComputeBudgetProgram.setComputeUnitPrice({
+      microLamports: priorityFeeLamports * 1000
+    })
+  );
+  onLog(`Priority fee: ${priorityFeeLamports} lamports (${priorityFeeLamports/1e9} SOL)`);
 
   // 1. Create mint account
   transaction.add(
@@ -166,19 +86,18 @@ export async function deployToken({
     })
   );
 
-  // 2. Initialize mint
+  // 2. Initialize mint - OFFICIAL WORKING VERSION
   transaction.add(
-    new TransactionInstruction(
-      createInitializeMintInstruction(
-        mintKeypair.publicKey,
-        parseInt(decimals),
-        wallet.keypair.publicKey,
-        wallet.keypair.publicKey
-      )
+    createInitializeMintInstruction(
+      mintKeypair.publicKey,
+      parseInt(decimals),
+      wallet.keypair.publicKey,
+      wallet.keypair.publicKey, // freeze authority
+      TOKEN_PROGRAM_ID
     )
   );
 
-  // 3. Create metadata — imported from metaplex.js, no duplication
+  // 3. Create metadata
   transaction.add(
     createCreateMetadataAccountV3Instruction(
       mintKeypair.publicKey,
@@ -196,40 +115,57 @@ export async function deployToken({
     )
   );
 
-  // 4. Create associated token account
+  // 4. Create ATA - OFFICIAL WORKING VERSION
   transaction.add(
-    new TransactionInstruction(
-      createAssociatedTokenAccountInstruction(
-        wallet.keypair.publicKey,
-        ata,
-        wallet.keypair.publicKey,
-        mintKeypair.publicKey
-      )
+    createAssociatedTokenAccountInstruction(
+      wallet.keypair.publicKey,
+      ata,
+      wallet.keypair.publicKey,
+      mintKeypair.publicKey,
+      TOKEN_PROGRAM_ID
     )
   );
 
-  // 5. Mint tokens to ATA
+  // 5. Mint tokens - OFFICIAL WORKING VERSION
   transaction.add(
-  transaction.sign(wallet.keypair, mintKeypair);
-        mintKeypair.publicKey,
-        ata,
-        wallet.keypair.publicKey,
-        mintAmount
-      )
+    createMintToInstruction(
+      mintKeypair.publicKey,
+      ata,
+      wallet.keypair.publicKey,
+      mintAmount,
+      [],
+      TOKEN_PROGRAM_ID
     )
   );
 
-  // Send transaction
-  transaction.feePayer = wallet.keypair.publicKey;
-  const { blockhash } = await connection.getLatestBlockhash();
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
   transaction.recentBlockhash = blockhash;
+  transaction.feePayer = wallet.keypair.publicKey;
+
+  onLog('Signing transaction...');
 
   transaction.partialSign(mintKeypair);
-  transaction.sign(wallet.keypair);
+  transaction.partialSign(wallet.keypair);
 
   onLog('Sending transaction...');
-  const signature = await connection.sendRawTransaction(transaction.serialize());
-  await connection.confirmTransaction(signature, 'confirmed');
+  
+  const signature = await connection.sendRawTransaction(transaction.serialize(), {
+    skipPreflight: false,
+    preflightCommitment: 'confirmed',
+    maxRetries: 5
+  });
+
+  onLog(`Transaction sent: ${signature.slice(0, 20)}...`);
+
+  const confirmation = await connection.confirmTransaction({
+    signature,
+    blockhash,
+    lastValidBlockHeight
+  }, 'confirmed');
+
+  if (confirmation.value.err) {
+    throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
+  }
 
   onLog('✓ Token deployed!', 'success');
 
