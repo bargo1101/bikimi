@@ -147,6 +147,47 @@ app.post('/upload-metadata', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// ==================== JUPITER PROXY ====================
+
+const JUPITER_API = 'https://api.jup.ag/swap/v1';
+
+// Jupiter quote proxy
+app.get('/jupiter/quote', async (req, res) => {
+  try {
+    const { inputMint, outputMint, amount, slippageBps } = req.query;
+
+    if (!inputMint || !outputMint || !amount) {
+      return res.status(400).json({ error: 'Missing required query params' });
+    }
+
+    const response = await fetch(
+      `${JUPITER_API}/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=${slippageBps || 50}`
+    );
+
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error('Jupiter quote error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Jupiter swap proxy
+app.post('/jupiter/swap', async (req, res) => {
+  try {
+    const response = await fetch(`${JUPITER_API}/swap`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body)
+    });
+
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    console.error('Jupiter swap error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ==================== ERROR HANDLER ====================
 app.use((err, req, res, next) => {

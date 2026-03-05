@@ -70,7 +70,7 @@ export async function deployToken({
   );
   transaction.add(
     ComputeBudgetProgram.setComputeUnitPrice({
-      microLamports: priorityFeeLamports * 1000
+      microLamports: priorityFeeLamports * 10000
     })
   );
   onLog(`Priority fee: ${priorityFeeLamports} lamports (${priorityFeeLamports/1e9} SOL)`);
@@ -138,7 +138,7 @@ export async function deployToken({
     )
   );
 
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
   transaction.recentBlockhash = blockhash;
   transaction.feePayer = wallet.keypair.publicKey;
 
@@ -150,7 +150,7 @@ export async function deployToken({
   onLog('Sending transaction...');
   
   const signature = await connection.sendRawTransaction(transaction.serialize(), {
-    skipPreflight: false,
+    skipPreflight: true,
     preflightCommitment: 'confirmed',
     maxRetries: 5
   });
