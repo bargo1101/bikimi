@@ -33,6 +33,11 @@ Thumbs.db
 # Coverage
 coverage/
 
-# Misc
+# Backups and temp files
+*.bak
+*.backup
 *.swp
 *.swo
+
+# Server uploads
+server/uploads/
