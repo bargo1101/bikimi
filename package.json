@@ -1,0 +1,18 @@
+{
+  "name": "bikimi",
+  "version": "1.0.0",
+  "description": "A Launchpad for solana meme tokens",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install && cd client && npm install && cd ../server && npm install",
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "client": "cd client && npm start",
+    "server": "cd server && node server.js",
+    "build": "cd client && npm run build",
+    "build:server": "cd server && npm install",
+    "start": "cd server && node server.js"
+  },
+  "devDependencies": {
+    "concurrently": "^7.6.0"
+  }
+}
