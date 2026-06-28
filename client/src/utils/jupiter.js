@@ -52,11 +52,11 @@ export async function executeTrade({
     throw new Error('Failed to create swap transaction');
   }
 
-  // Deserialize
+  // FIX: Deserialize VersionedTransaction properly
   const swapTransactionBuf = Buffer.from(swapData.swapTransaction, 'base64');
   const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
 
-  // Sign with wallet keypair
+  // FIX: Sign with array of signers (required for VersionedTransaction)
   transaction.sign([wallet.keypair]);
 
   // Send transaction
@@ -67,9 +67,9 @@ export async function executeTrade({
     preflightCommitment: 'confirmed'
   });
 
-  // Wait for confirmation
+  // Wait for confirmation with fresh blockhash
   onLog(`Confirming ${signature.slice(0, 8)}...`);
-  const latestBlockHash = await connection.getLatestBlockhash();
+  const latestBlockHash = await connection.getLatestBlockhash('confirmed');
   await connection.confirmTransaction({
     blockhash: latestBlockHash.blockhash,
     lastValidBlockHeight: latestBlockHash.lastValidBlockHeight,
@@ -85,4 +85,3 @@ export async function executeTrade({
     price: quote.price
   };
 }
-
