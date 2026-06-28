@@ -1,0 +1,13 @@
+{
+  "buildCommand": "cd client && npm run build",
+  "outputDirectory": "client/build",
+  "env": {
+    "REACT_APP_BACKEND_URL": "@backend_url"
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
