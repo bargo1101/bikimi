@@ -138,6 +138,7 @@ export async function deployToken({
     )
   );
 
+  // FIX: Get blockhash JUST BEFORE signing
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
   transaction.recentBlockhash = blockhash;
   transaction.feePayer = wallet.keypair.publicKey;
@@ -157,10 +158,13 @@ export async function deployToken({
 
   onLog(`Transaction sent: ${signature.slice(0, 20)}...`);
 
+  // FIX: Get FRESH blockhash for confirmation (old one expires)
+  const confirmBlockhash = await connection.getLatestBlockhash('confirmed');
+  
   const confirmation = await connection.confirmTransaction({
     signature,
-    blockhash,
-    lastValidBlockHeight
+    blockhash: confirmBlockhash.blockhash,
+    lastValidBlockHeight: confirmBlockhash.lastValidBlockHeight
   }, 'confirmed');
 
   if (confirmation.value.err) {
@@ -175,4 +179,3 @@ export async function deployToken({
     ata: ata.toString()
   };
 }
-
